@@ -310,43 +310,7 @@ static void MupenSetAudioSpeed(int percent)
     
     ConfigSaveSection("Core");
     
-    
-    /* Configure Video */
-    m64p_handle video;
-    ConfigOpenSection("Video-General", &video);
-    
-    int useFullscreen = 1;
-    ConfigSetParameter(video, "Fullscreen", M64TYPE_BOOL, &useFullscreen);
-    
-    int screenWidth = 640;
-    ConfigSetParameter(video, "ScreenWidth", M64TYPE_INT, &screenWidth);
-    
-    int screenHeight = 480;
-    ConfigSetParameter(video, "ScreenHeight", M64TYPE_INT, &screenHeight);
-    
-    ConfigSaveSection("Video-General");
-    
-    
-    /* Configure GLideN64 */
-    m64p_handle gliden64;
-    ConfigOpenSection("Video-GLideN64", &gliden64);
-    
-    // 0 = stretch, 1 = 4:3, 2 = 16:9, 3 = adjust
-    int aspectRatio = 1;
-    ConfigSetParameter(gliden64, "AspectRatio", M64TYPE_INT, &aspectRatio);
-    
-    int enablePerPixelLighting = 1;
-    ConfigSetParameter(gliden64, "EnableHWLighting", M64TYPE_BOOL, &enablePerPixelLighting);
-    
-    int osd = 0;
-    ConfigSetParameter(gliden64, "OnScreenDisplay", M64TYPE_BOOL, &osd);
-    ConfigSetParameter(gliden64, "ShowFPS", M64TYPE_BOOL, &osd);
-    ConfigSetParameter(gliden64, "ShowVIS", M64TYPE_BOOL, &osd);
-    ConfigSetParameter(gliden64, "ShowPercent", M64TYPE_BOOL, &osd);
-    ConfigSetParameter(gliden64, "ShowInternalResolution", M64TYPE_BOOL, &osd);
-    ConfigSetParameter(gliden64, "ShowRenderingResolution", M64TYPE_BOOL, &osd);
-    
-    ConfigSaveSection("Video-GLideN64");
+    /* Load ROM */
     
     NSData *romData = [NSData dataWithContentsOfURL:gameURL options:NSDataReadingMappedAlways error:nil];
     if (romData.length == 0)
@@ -363,6 +327,77 @@ static void MupenSetAudioSpeed(int percent)
     }
     
     
+    /* Configure Video */
+    m64p_handle video;
+    ConfigOpenSection("Video-General", &video);
+    
+    int useFullscreen = 1;
+    ConfigSetParameter(video, "Fullscreen", M64TYPE_BOOL, &useFullscreen);
+    
+    int screenWidth = 640;
+    ConfigSetParameter(video, "ScreenWidth", M64TYPE_INT, &screenWidth);
+    
+    int screenHeight = 480;
+    ConfigSetParameter(video, "ScreenHeight", M64TYPE_INT, &screenHeight);
+    
+    ConfigSaveSection("Video-General");
+    
+    /* Load video plugins */
+    
+    BOOL didLoadVideoPlugin = [self loadPlugin:@"N64DeltaCore_Video_GlideN64" type:M64PLUGIN_GFX];
+    NSAssert(didLoadVideoPlugin, @"Failed to load video plugin.");
+    
+    /* Prepare RSP */
+    
+    const char *ROMname = (const char *)ROM_HEADER.Name;
+    const char *gfxPluginName;
+    gfx.getVersion(NULL, NULL, NULL, &gfxPluginName, NULL);
+    
+    if(strstr(gfxPluginName, "GLideN64") != 0) {
+        m64p_handle configGfx;
+        ConfigOpenSection("Video-GLideN64", &configGfx);
+
+        // Workaround for https://github.com/gonetz/GLideN64/issues/1142
+        // Note: CorrectTexrectCoords is also an option, as per https://github.com/gonetz/GLideN64/issues/1209
+        if(strstr(ROMname, "MARIOKART64") != 0) {
+            int enableNativeResTexrects = 1;
+            ConfigSetParameter(configGfx, "EnableNativeResTexrects", M64TYPE_BOOL, &enableNativeResTexrects);
+        }
+
+        // Workaround for https://github.com/gonetz/GLideN64/issues/1568
+        if(strstr(ROMname, "DR.MARIO 64") != 0) {
+            int enableCopyAuxToRDRAM = 1;
+            ConfigSetParameter(configGfx, "EnableCopyAuxiliaryToRDRAM", M64TYPE_BOOL, &enableCopyAuxToRDRAM);
+        }
+        
+        // 0 = stretch, 1 = 4:3, 2 = 16:9, 3 = adjust
+        int aspectRatio = 1;
+        ConfigSetParameter(configGfx, "AspectRatio", M64TYPE_INT, &aspectRatio);
+
+        int enablePerPixelLighting = 1;
+        ConfigSetParameter(configGfx, "EnableHWLighting", M64TYPE_BOOL, &enablePerPixelLighting);
+
+        int osd = 0;
+        ConfigSetParameter(configGfx, "OnScreenDisplay", M64TYPE_BOOL, &osd);
+        ConfigSetParameter(configGfx, "ShowFPS", M64TYPE_BOOL, &osd);
+        ConfigSetParameter(configGfx, "ShowVIS", M64TYPE_BOOL, &osd);
+        ConfigSetParameter(configGfx, "ShowPercent", M64TYPE_BOOL, &osd);
+        ConfigSetParameter(configGfx, "ShowInternalResolution", M64TYPE_BOOL, &osd);
+        ConfigSetParameter(configGfx, "ShowRenderingResolution", M64TYPE_BOOL, &osd);
+
+        ConfigSaveSection("Video-GLideN64");
+    }
+    
+    m64p_handle configRSP;
+    ConfigOpenSection("rsp-cxd4", &configRSP);
+    int usingHLE = 1;
+    if(strstr(gfxPluginName, "angrylion's RDP Plus") != 0)
+        usingHLE = 0; // LLE GPU plugin
+    ConfigSetParameter(configRSP, "DisplayListToGraphicsPlugin", M64TYPE_BOOL, &usingHLE);
+    
+    BOOL didLoadRSPPlugin = [self loadPlugin:@"N64DeltaCore_RSP_HLE" type:M64PLUGIN_RSP];
+    NSAssert(didLoadRSPPlugin, @"Failed to load RSP plugin.");
+    
     /* Prepare Audio */
     audio.aiDacrateChanged = MupenAudioSampleRateChanged;
     audio.aiLenChanged = MupenAudioLenChanged;
@@ -375,20 +410,8 @@ static void MupenSetAudioSpeed(int percent)
     input.initiateControllers = MupenInitiateControllers;
     input.controllerCommand = MupenControllerCommand;
     plugin_start(M64PLUGIN_INPUT);
-        
-    if (![self didLoadPlugins])
-    {
-        /* Prepare Plugins */
-        
-        BOOL didLoadVideoPlugin = [self loadPlugin:@"N64DeltaCore_Video" type:M64PLUGIN_GFX];
-        NSAssert(didLoadVideoPlugin, @"Failed to load video plugin.");
-        
-        BOOL didLoadRSPPlugin = [self loadPlugin:@"N64DeltaCore_RSP" type:M64PLUGIN_RSP];
-        NSAssert(didLoadRSPPlugin, @"Failed to load RSP plugin.");
-        
-        self.didLoadPlugins = YES;
-    }
     
+    self.didLoadPlugins = YES;
     self.running = YES;
     
     [NSThread detachNewThreadSelector:@selector(startEmulationLoop) toTarget:self withObject:nil];
